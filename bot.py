@@ -1,3 +1,22 @@
+import sys
+import subprocess
+
+REQUIRED_PACKAGES = {
+    "discord": "discord.py",
+    "requests": "requests",
+    "yt_dlp": "yt-dlp",
+    "dotenv": "python-dotenv",
+    "nacl": "PyNaCl"
+}
+
+for import_name, package_name in REQUIRED_PACKAGES.items():
+    try:
+        __import__(import_name)
+    except ImportError:
+        print(f"Installing {package_name}...")
+        subprocess.check_call([sys.executable, "-m", "pip", "install", package_name])
+        print(f"{package_name} installed.")
+
 import discord
 from discord.ext import commands
 import requests
