@@ -1,22 +1,3 @@
-import sys
-import subprocess
-
-REQUIRED_PACKAGES = {
-    "discord": "discord.py",
-    "requests": "requests",
-    "yt_dlp": "yt-dlp",
-    "dotenv": "python-dotenv",
-    "nacl": "PyNaCl"
-}
-
-for import_name, package_name in REQUIRED_PACKAGES.items():
-    try:
-        __import__(import_name)
-    except ImportError:
-        print(f"Installing {package_name}...")
-        subprocess.check_call([sys.executable, "-m", "pip", "install", package_name])
-        print(f"{package_name} installed.")
-
 import discord
 from discord.ext import commands
 import requests
@@ -38,10 +19,13 @@ intents.message_content = True
 Client = commands.Bot(command_prefix='!', intents=intents)
 Client.remove_command('help')
 
-# you can change this depending on Win/Linux, or put a directory in the .env file
-#FFMPEG_EXECUTABLE = "C:\\ffmpeg\\bin\\ffmpeg.exe"
-#FFMPEG_EXECUTABLE = "ffmpeg"
 FFMPEG_EXECUTABLE = os.getenv('FFMPEG')
+
+def get_queue(guild_id):
+    if guild_id not in songqueue:
+        songqueue[guild_id] = []
+    return songqueue[guild_id]
+
 
 def randUseragent():
     with open('UserAgents.txt', 'r') as f:
@@ -53,52 +37,20 @@ FFMPEG_OPTIONS = {
     'options': '-vn'
 }
 
-SOUNDCLOUD_HEADERS = {
-    'Authorization': f'OAuth {soundcloud_oauth}',
-    'User-Agent': randUseragent(),
-    'Origin': 'https://soundcloud.com',
-    'Referer': 'https://soundcloud.com/'
-}
-    
-def get_queue(guild_id):
-    if guild_id not in songqueue:
-        songqueue[guild_id] = []
-    return songqueue[guild_id]
-
-async def play_next(voice_client, guild_id):
-    queue = get_queue(guild_id)
-    
-    if not queue:
-        await asyncio.sleep(300)  # wait 5 minutes
-        if not get_queue(guild_id):  # check again after waiting
-            await voice_client.disconnect()
-        return
-    
-    song = queue.pop(0)
-    audio_url = get_audio_url(song["permalink"])
-
-    # fallback to youtube if soundcloud DRM blocks it
-    if not audio_url:
-        print(f"SoundCloud blocked, trying YouTube for: {song['title']}")
-        audio_url = get_youtube_url(song["title"], song["artist"])
-    
-    if not audio_url:
-        print(f"Skipping {song['title']} — no audio source found")
-        await play_next(voice_client, guild_id)
-        return
-    
-    def after_playing(error):
-        if error:
-            print(f"Player error: {error}")
-        asyncio.run_coroutine_threadsafe(play_next(voice_client, guild_id), Client.loop)
-    
-    voice_client.play(discord.FFmpegPCMAudio(audio_url, executable=FFMPEG_EXECUTABLE, **FFMPEG_OPTIONS), after=after_playing)
+def get_soundcloud_headers():
+    return {
+        'Authorization': f'OAuth {soundcloud_oauth}',
+        'User-Agent': randUseragent(),
+        'Origin': 'https://soundcloud.com',
+        'Referer': 'https://soundcloud.com/'
+    }
 
 def get_audio_url(permalink_url):
     try:
         r = requests.get(
             f'https://api-v2.soundcloud.com/resolve?url={permalink_url}&client_id={soundcloud_clientid}',
-            headers=SOUNDCLOUD_HEADERS
+            headers=get_soundcloud_headers(),
+            timeout=10
         )
         data = r.json()
         track_auth = data.get('track_authorization', '')
@@ -107,13 +59,12 @@ def get_audio_url(permalink_url):
 
         for t in data['media']['transcodings']:
             protocol = t['format']['protocol']
-            
             if protocol not in allowed_protocols:
                 continue
-                
             stream_r = requests.get(
                 f"{t['url']}?client_id={soundcloud_clientid}&track_authorization={track_auth}",
-                headers=SOUNDCLOUD_HEADERS
+                headers=get_soundcloud_headers(),
+                timeout=10
             )
             if stream_r.status_code == 200:
                 url = stream_r.json().get('url')
@@ -134,6 +85,7 @@ def get_youtube_url(title, artist):
             'format': 'bestaudio/best',
             'noplaylist': True,
             'quiet': True,
+            'socket_timeout': 8,
         }
         with yt_dlp.YoutubeDL(ytdl_opts) as ydl:
             info = ydl.extract_info(f"ytsearch:{artist} {title}", download=False)
@@ -141,7 +93,35 @@ def get_youtube_url(title, artist):
     except Exception as e:
         print(f"YouTube fallback failed: {e}")
         return None
-    
+
+async def play_next(voice_client, guild_id):
+    queue = get_queue(guild_id)
+
+    if not queue:
+        await voice_client.disconnect()
+        return
+
+    song = queue.pop(0)
+    audio_url = song.get("audio_url")
+
+    if not audio_url:
+        print(f"Skipping {song['title']} — no audio source found")
+        await play_next(voice_client, guild_id)
+        return
+
+    def after_playing(error):
+        if error:
+            print(f"Player error: {error}")
+        asyncio.run_coroutine_threadsafe(
+            play_next(voice_client, guild_id),
+            Client.loop
+        )
+
+    voice_client.play(
+        discord.FFmpegPCMAudio(audio_url, executable=FFMPEG_EXECUTABLE, **FFMPEG_OPTIONS),
+        after=after_playing
+    )
+
 def APIRequest(query: str = None):
     APIheaders = {
         'User-Agent': randUseragent(),
@@ -151,7 +131,8 @@ def APIRequest(query: str = None):
     }
     response = requests.get(
         f'https://api-v2.soundcloud.com/search?q={query}&client_id={soundcloud_clientid}&limit=14',
-        headers=APIheaders
+        headers=APIheaders,
+        timeout=10
     )
     return response
 
@@ -168,7 +149,6 @@ def getsongs(search_query: str = None):
             "songs": {}
         }
     }
-    
     for node in data["collection"]:
         if node["kind"] == "track":
             result["data"]["songs"][str(count)] = {
@@ -184,28 +164,12 @@ def getsongs(search_query: str = None):
 
 def song_embed(index: int, songinfo):
     song = songinfo[str(index)]
-
-    embed = discord.Embed(
-        title=":musical_note: Playing/Queuing:",
-        color=discord.Color.blurple()
-    )
-    embed.add_field(
-        name="Title",
-        value=song["title"],
-        inline=True
-    )
-    embed.add_field(
-        name="Artist",
-        value=song["artist"],
-        inline=True
-    )
+    embed = discord.Embed(title=":musical_note: Playing/Queuing:", color=discord.Color.blurple())
+    embed.add_field(name="Title", value=song["title"], inline=True)
+    embed.add_field(name="Artist", value=song["artist"], inline=True)
     artwork = song.get("coverlink") or "https://images.steamusercontent.com/ugc/885384897182110030/F095539864AC9E94AE5236E04C8CA7C2725BCEFF/"
     embed.set_thumbnail(url=artwork)
-    embed.add_field(
-        name="Link",
-        value=f"[soundcloud]({song['permalink']})",
-        inline=False
-        )
+    embed.add_field(name="Link", value=f"[soundcloud]({song['permalink']})", inline=False)
     return embed
 
 class OptionButtons(discord.ui.View):
@@ -216,6 +180,7 @@ class OptionButtons(discord.ui.View):
     async def handle_selection(self, interaction: discord.Interaction, index: int):
         await interaction.response.defer()
         self.clear_items()
+        await interaction.edit_original_response(view=self)
 
         song = self.songinfo[str(index)]
         guild_id = interaction.guild.id
@@ -225,13 +190,18 @@ class OptionButtons(discord.ui.View):
         if not voice_client:
             if interaction.user.voice:
                 voice_client = await interaction.user.voice.channel.connect()
+            else:
+                await interaction.followup.send("Join a voice channel first!")
+                return
 
-        audio_url = get_audio_url(song["permalink"])
-    
+
+        loop = asyncio.get_event_loop()
+        audio_url = await loop.run_in_executor(None, get_audio_url, song["permalink"])
+
         if not audio_url:
-            errornoti= discord.Embed(title=":warning: DRM protected song, streaming from youtube",color=discord.Color.yellow())
+            errornoti = discord.Embed(title=":warning: DRM protected song, streaming from YouTube", color=discord.Color.yellow())
             await interaction.edit_original_response(embed=errornoti)
-            audio_url = get_youtube_url(song["title"], song["artist"])
+            audio_url = await loop.run_in_executor(None, get_youtube_url, song["title"], song["artist"])
 
         queue.append({
             "title": song["title"],
@@ -277,43 +247,35 @@ async def skip(ctx):
     if not ctx.author.voice:
         await ctx.send("You must be in a voice channel first!")
         return
-    
     voice_client = ctx.voice_client
-    
     if not voice_client or not voice_client.is_playing():
         await ctx.send("Nothing is playing!")
         return
-    
     voice_client.stop()
     await ctx.send("Skipped!")
-    
+
 @Client.command()
 @commands.guild_only()
 async def play(ctx, *, songtitle: str = None):
     if not songtitle:
         await ctx.send("Please provide a song title!")
         return
-
     if not ctx.author.voice:
         await ctx.send("You must be in a voice channel first!")
         return
-
     if not ctx.voice_client:
         channel = ctx.author.voice.channel
         await channel.connect()
-        embed = discord.Embed(
-        title=f":loud_sound: Joined {channel.name}!", color=discord.Color.blue())
-        await ctx.send(embed = embed)
+        embed = discord.Embed(title=f":loud_sound: Joined {channel.name}!", color=discord.Color.blue())
+        await ctx.send(embed=embed)
 
     songs = getsongs(songtitle)
-
     if not songs or not songs["data"]["songs"]:
         await ctx.send("No results found.")
         return
 
     songs_list = ""
     count = 1
-
     for key, song in songs["data"]["songs"].items():
         songs_list += f"{count}. **{song['artist']}** - {song['title']}\n"
         count += 1
