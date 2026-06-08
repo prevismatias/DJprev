@@ -4,10 +4,6 @@ Simple music bot made in python that utilizes yt_dlp and FFMPEG. Uses soundcloud
 
 ## Installation
 
-Instructions on how to get a copy of the project and running on your local machine.
-
-### Prerequisites
-
 You can use both Linux and Windows to host this bot.
 
 You will need the following:
@@ -15,7 +11,7 @@ You will need the following:
 - FFMPEG
  - pip
 
-you can use the batch script or power shell script to download the dependencies depending on your operating system
+However, you can use the batch script or power shell script in release to download the dependencies depending on your operating system
 
 ## Usage
 
