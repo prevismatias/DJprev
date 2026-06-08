@@ -3,8 +3,6 @@
 Simple music bot made in python that utilizes yt_dlp and FFMPEG. Uses soundcloud's api to search and get song files. In the case of songs being DRM protected, the bot will stream the song from youtube.
 
 ## Installation
-If you don't want to manually install packages please use the batch/shell script provided in the release :D
-### Prerequisites
 
 You will need the following:
 - Python3
@@ -31,6 +29,7 @@ For linux use: `sudo apt install ffmpeg -y` and then `FFMPEG=ffmpeg` into the .e
 
 
 ### Python:
+You can download python using this [link](https://www.python.org/downloads/)
 start the bot simply with `python3 bot.py`   
 Creating a linux service is something I will leave to you guys. Go learn something!
 ### Commands
